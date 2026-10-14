@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: instagram-public-stories-api
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: API_KEY
+        generateValue: true
+      - key: STORY_PROVIDER_API_KEY
+        sync: false
+      - key: STORY_PROVIDER_BASE_URL
+        value: https://api.profilequery.com
+      - key: STORY_PROVIDER_TIMEOUT_MS
+        value: "15000"
