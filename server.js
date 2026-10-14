@@ -121,6 +121,117 @@ app.get("/v1/stories/:username", authenticate, async (req, res) => {
   });
 });
 
+
+app.get("/v1/posts/:username", authenticate, async (req, res) => {
+  const username = cleanUsername(req.params.username);
+
+  if (!username) {
+    return res.status(400).json({
+      error: {
+        code: "invalid_username",
+        message: "Provide a valid Instagram username."
+      }
+    });
+  }
+
+  const cutoff = Date.now() - 72 * 60 * 60 * 1000;
+  const posts = [];
+  let cursor = null;
+  let pagesChecked = 0;
+  const maxPages = 10;
+
+  try {
+    do {
+      const upstreamUrl = new URL(`${PROVIDER_BASE}/v1/profile/posts`);
+      upstreamUrl.searchParams.set("handle", username);
+
+      if (cursor) {
+        upstreamUrl.searchParams.set("cursor", cursor);
+      }
+
+      const upstream = await fetch(upstreamUrl, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${PROVIDER_KEY}`
+        },
+        signal: AbortSignal.timeout(TIMEOUT_MS)
+      });
+
+      if (!upstream.ok) {
+        return res.status(502).json({
+          error: {
+            code: "provider_request_failed",
+            message: "Could not retrieve Instagram posts.",
+            provider_status: upstream.status
+          }
+        });
+      }
+
+      const payload = await upstream.json();
+      const data = payload?.data ?? {};
+
+      const items = Array.isArray(data.items)
+        ? data.items
+        : Array.isArray(payload?.items)
+        ? payload.items
+        : [];
+
+      for (const post of items) {
+        const posted = Date.parse(post.taken_at);
+
+        if (
+          Number.isFinite(posted) &&
+          posted >= cutoff &&
+          posted <= Date.now()
+        ) {
+          posts.push(post);
+        }
+      }
+
+      pagesChecked++;
+
+      const dates = items
+        .map(post => Date.parse(post.taken_at))
+        .filter(Number.isFinite);
+
+      const reachedOlderPosts =
+        dates.length > 0 && Math.min(...dates) < cutoff;
+
+      cursor = data.next_cursor || null;
+
+      if (reachedOlderPosts || items.length === 0) {
+        break;
+      }
+
+    } while (cursor && pagesChecked < maxPages);
+
+    res.set("Cache-Control", "no-store");
+
+    return res.json({
+      username,
+      fetched_at: new Date().toISOString(),
+      window_hours: 72,
+      count: posts.length,
+      posts,
+      pages_checked: pagesChecked,
+      truncated: Boolean(cursor && pagesChecked >= maxPages),
+      provider: "profilequery"
+    });
+
+  } catch (error) {
+    console.error("Posts endpoint error:", error);
+
+    return res.status(502).json({
+      error: {
+        code: "provider_unavailable",
+        message: "Unable to retrieve Instagram posts."
+      }
+    });
+  }
+});
+
+
 app.use((_req, res) => {
   res.status(404).json({ error: { code: "not_found", message: "Route not found." } });
 });
